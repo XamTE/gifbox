@@ -20,7 +20,7 @@ from .presets import all_presets, get_preset
 from .pipeline import Options, convert_many, human
 from .settings import Settings
 from .sources import is_url
-from .winutil import resource_path
+from .winutil import resource_path, use_utf8_console
 
 try:
     from tkinterdnd2 import DND_FILES, DND_TEXT, TkinterDnD
@@ -927,6 +927,7 @@ def selftest():
 
 
 def main(argv=None):
+    use_utf8_console()
     argv_probe = list(argv if argv is not None else sys.argv[1:])
     if argv_probe and argv_probe[0] == "--selftest":
         import json

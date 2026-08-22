@@ -6,6 +6,19 @@ import sys
 from pathlib import Path
 
 
+def use_utf8_console():
+    """콘솔 출력에 한글을 써도 죽지 않게 한다.
+
+    파이프로 넘기거나 CI처럼 코드페이지가 cp1252 인 곳에서는 print 가
+    UnicodeEncodeError 로 터집니다. 못 그리는 글자는 대체 문자로 넘깁니다.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 def app_dir() -> Path:
     """프로그램이 놓인 폴더.
 

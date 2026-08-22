@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write          # 릴리스 생성에 필요
 
+env:
+  PYTHONUTF8: "1"          # 러너 콘솔이 cp1252 라 한글 출력이 깨진다
+  PYTHONIOENCODING: "utf-8" 
+
 jobs:
   build:
     runs-on: windows-latest

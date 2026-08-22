@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""GifBox 를 exe 로 묶는다.
+r"""GifBox 를 exe 로 묶는다.
 
     python build_exe.py                  # dist\GifBox.exe 한 개 (권장)
     python build_exe.py --with-ffmpeg    # ffmpeg 까지 넣어 어디서든 동작
@@ -17,6 +17,13 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+for _stream in (sys.stdout, sys.stderr):
+    # CI 콘솔(cp1252)에서 한글 print 가 터지지 않게
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"

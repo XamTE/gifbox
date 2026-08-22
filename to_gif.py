@@ -23,6 +23,7 @@ from gifbox.converters import (DEFAULT_EXTS, IMAGE_EXTS, VIDEO_EXTS,  # noqa: E4
                                find_ffmpeg)
 from gifbox.pipeline import Options, convert_many, human  # noqa: E402
 from gifbox.settings import Settings  # noqa: E402
+from gifbox.winutil import use_utf8_console  # noqa: E402
 
 
 def build_parser():
@@ -64,6 +65,7 @@ def build_parser():
 
 
 def main(argv=None):
+    use_utf8_console()
     args = build_parser().parse_args(argv)
 
     if args.presets:
