@@ -1,6 +1,12 @@
 # GifBox
 
+[![build](https://github.com/XamTE/gifbox/actions/workflows/build.yml/badge.svg)](https://github.com/XamTE/gifbox/actions/workflows/build.yml)
+
 webp · mp4 등을 GIF로 바꾸고, 결과를 바로 클립보드에 올려주는 도구.
+디스코드에 GIF 올리는 워크플로를 겨냥해 만들었습니다.
+
+> **받으러 가기 → [최신 릴리스](https://github.com/XamTE/gifbox/releases/latest)**
+> `GifBox-full.exe` 하나만 받으면 됩니다. 설치도, 파이썬도 필요 없습니다.
 
 ## 실행
 
@@ -265,3 +271,7 @@ GUI에 노출하려면 `gui.py` 의 `_build()` 에 위젯을 놓고 `_collect_se
 - ffmpeg — 영상 변환용 (`winget install Gyan.FFmpeg`)
 - tkinterdnd2 — 창에 끌어다 놓기용 (`pip install tkinterdnd2`, 없어도 창은 동작)
 - pyinstaller — exe 빌드용 (`pip install pyinstaller`, 빌드할 때만 필요)
+
+## 라이선스
+
+MIT — [LICENSE](LICENSE) 참고.
