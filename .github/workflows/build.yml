@@ -1,0 +1,104 @@
+name: build
+
+# main 에 올릴 때마다 빌드해서 확인하고,
+# v1.0.0 처럼 태그를 밀면 릴리스에 exe 를 붙입니다.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write          # 릴리스 생성에 필요
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install pillow tkinterdnd2 pyinstaller
+
+      # --- 가벼운 쪽: ffmpeg 없이 (PC에 설치된 ffmpeg 를 씀) ---------------
+      - name: 빌드 (슬림)
+        run: python build_exe.py
+
+      - name: 자가진단 (슬림)
+        run: |
+          .\dist\GifBox.exe --selftest report-slim.json
+          Get-Content report-slim.json
+        # ffmpeg·tkdnd·ImageTk 가 번들에서 빠지면 여기서 실패합니다
+
+      - name: 이름 바꿔 보관
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Move-Item dist\GifBox.exe out\GifBox.exe
+
+      # --- 무거운 쪽: ffmpeg 를 넣어 아무 PC에서나 바로 실행 ---------------
+      - name: ffmpeg 내려받기
+        run: |
+          $zip = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri $zip -OutFile ffmpeg.zip -UseBasicParsing
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_dl
+          $exe = Get-ChildItem ffmpeg_dl -Recurse -Filter ffmpeg.exe |
+                 Select-Object -First 1
+          if (-not $exe) { throw "내려받은 압축에 ffmpeg.exe 가 없습니다" }
+          Copy-Item $exe.FullName ffmpeg.exe
+          .\ffmpeg.exe -version | Select-Object -First 1
+
+      - name: 빌드 (ffmpeg 포함)
+        run: python build_exe.py --with-ffmpeg
+
+      - name: 자가진단 (ffmpeg 포함)
+        run: |
+          .\dist\GifBox.exe --selftest report-full.json
+          Get-Content report-full.json
+
+      - name: 이름 바꿔 보관
+        run: Move-Item dist\GifBox.exe out\GifBox-full.exe
+
+      - name: 크기 확인
+        run: Get-ChildItem out | Select-Object Name, @{n="MB";e={[math]::Round($_.Length/1MB,1)}}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GifBox
+          path: out/*.exe
+
+      # --- 태그를 밀었을 때만 릴리스 -------------------------------------
+      - name: 릴리스 만들기
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @"
+          ## 받는 법
+
+          | 파일 | 설명 |
+          |---|---|
+          | **GifBox-full.exe** | 이것만 받으면 됩니다. ffmpeg 포함, 설치 필요 없음 |
+          | GifBox.exe | 가벼운 쪽. PC에 ffmpeg 가 이미 있을 때 |
+
+          받아서 두 번 누르면 창이 뜹니다. 파일을 창에 끌어다 놓으면 GIF로 바뀌고
+          결과가 바로 클립보드에 올라가니 디스코드에 Ctrl+V 하면 됩니다.
+
+          ### 처음 실행할 때 파란 경고창이 뜬다면
+
+          코드 서명 인증서를 붙이지 않아서 Windows SmartScreen 이 모르는 프로그램이라고
+          경고합니다. **추가 정보 → 실행** 을 누르면 됩니다. 백신이 걸고넘어지는 경우도
+          있는데 PyInstaller 로 묶은 exe 에서 흔한 오탐입니다.
+          "@
+          gh release create "$env:GITHUB_REF_NAME" `
+            out\GifBox.exe out\GifBox-full.exe `
+            --title "GifBox $env:GITHUB_REF_NAME" `
+            --notes $notes

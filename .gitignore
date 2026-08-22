@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+build/
+dist/
+out/
+
+# CI에서 내려받는 것들
+ffmpeg.exe
+ffmpeg.zip
+ffmpeg_dl/
+report-*.json
