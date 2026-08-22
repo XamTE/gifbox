@@ -17,6 +17,10 @@ webp · mp4 등을 GIF로 바꾸고, 결과를 바로 클립보드에 올려주�
 | `GIF변환.bat` | 파일을 끌어다 놓으면 콘솔에서 바로 변환 |
 | `to_gif.py` | 명령줄 버전 |
 
+본 창에는 **이번에 어떻게 변환할지**(프리셋·크기·자르기·목표 용량)만 두고,
+한 번 정해두면 잘 안 바꾸는 것들(클립보드·원본 삭제·항상 위 …)은 오른쪽 위
+**⚙ 설정** 창으로 모았습니다.
+
 창을 띄워두고 파일을 끌어다 놓으면 변환되고, 결과 GIF가 클립보드에 올라갑니다.
 그대로 **Ctrl+V** 로 카카오톡·디스코드·슬랙·탐색기 어디든 붙여넣으면 됩니다.
 반대로 탐색기에서 파일을 Ctrl+C 한 뒤 창에서 **Ctrl+V** 를 눌러도 변환됩니다.
@@ -139,7 +143,9 @@ python to_gif.py https://example.com/anim.webp --width 480
 
 ```
 gifbox/
+  theme.py       디스코드풍 어두운 팔레트 + ttk 스타일 (색은 전부 여기)
   settings.py    설정값 정의 + JSON 저장 (%APPDATA%\GifBox\settings.json)
+  settings_dialog.py  ⚙ 설정 창 (켜고 끄는 항목은 전부 여기로)
   presets.py     프리셋 레지스트리 (디스코드용 / 이모지 / 초경량 / 고화질)
   history.py     최근 만든 GIF 목록 (history.json)
   thumbs.py      썸네일 굽기·캐시 + 호버 재생용 프레임 읽기
@@ -223,7 +229,15 @@ class UploadAction(Action):
         return "☁ %d개 업로드 완료" % len(urls)
 ```
 
-### 3. 새 프리셋
+### 3. 색 바꾸기
+
+`theme.py` 의 `PALETTE` 만 고치면 창 전체가 따라옵니다.
+
+```python
+PALETTE["accent"] = "#57F287"      # 블러플 대신 초록으로
+```
+
+### 4. 새 프리셋
 
 ```python
 register_preset(Preset(
@@ -235,11 +249,13 @@ register_preset(Preset(
 
 GUI 목록과 CLI `--preset` 에 자동으로 나타납니다.
 
-### 4. 새 설정값
+### 5. 새 설정값
 
 `settings.py` 의 `DEFAULTS` 에 한 줄 추가하면 저장·불러오기·기본값 병합이 자동입니다.
 범위 제한이 필요하면 `_RANGES` 에도 넣습니다.
-GUI에 노출하려면 `gui.py` 의 `_build()` 에 위젯을 놓고 `_collect_settings()` 에 한 줄 더합니다.
+켜고 끄는 항목이면 `settings_dialog.py` 의 `SECTIONS` 에 한 줄 넣는 것으로 끝납니다.
+변환 방식에 직접 관계된 값이라면 `gui.py` 의 `_build_options()` 에 위젯을 놓고
+`_collect_settings()` 에 한 줄 더합니다.
 
 ## 알아둘 점
 
@@ -256,6 +272,10 @@ GUI에 노출하려면 `gui.py` 의 `_build()` 에 위젯을 놓고 `_collect_se
 - 썸네일 굽기와 호버용 프레임 읽기는 **워커 스레드**에서 합니다. 스레드는 PIL 이미지만
   만들고, `ImageTk.PhotoImage` 생성은 반드시 메인 스레드에서 합니다(tk 객체는 스레드를
   넘나들면 안 됩니다). 목록이 갱신되면 토큰이 바뀌어 이전 요청 결과는 버려집니다.
+- **ttk 는 clam 테마 위에서만 색이 제대로 먹습니다.** 그리고 배경색만 바꾸면
+  안 됩니다 — clam 은 테두리를 `lightcolor`/`darkcolor`/`bordercolor` 로 그리는데,
+  이 셋이 기본 밝은 회색이라 어두운 배경 위에 흰 테두리가 남습니다.
+  `theme.py` 는 `style.configure(".")` 에서 이 셋의 기본값부터 덮습니다.
 - **창 크기를 숫자로 박아두지 않습니다.** `_fit_window()` 가 위젯이 요구하는 크기를
   재서 창을 맞춥니다 — 글꼴·DPI 배율에 따라 필요한 크기가 달라지고, 기능을 더 붙여도
   저절로 따라오게 하기 위함입니다.

@@ -2,8 +2,11 @@
 """항상 띄워두고 쓰는 작은 변환 창.
 
 - 파일/폴더를 창에 끌어다 놓으면 즉시 GIF로 변환
-- Ctrl+V 로 탐색기에서 복사한 파일을 받아서 변환
+- 브라우저에서 이미지를 끌어오거나 Ctrl+V 로 주소를 넣어도 변환
 - 변환된 GIF는 곧바로 클립보드에 올라가므로 Ctrl+V 로 어디든 붙여넣기
+
+본 창에는 '이번에 어떻게 변환할지'만 둡니다. 한 번 정해두면 잘 안 바꾸는
+것들(클립보드·원본 삭제·항상 위 …)은 ⚙ 설정 창으로 모았습니다.
 """
 
 import queue
@@ -14,12 +17,14 @@ from pathlib import Path
 from tkinter import filedialog, ttk
 
 from . import history as history_mod
+from . import theme
 from .converters import (DEFAULT_EXTS, find_ffmpeg, format_time, parse_time,
                          supported_extensions)
-from .presets import all_presets, get_preset
 from .pipeline import Options, convert_many, human
+from .presets import all_presets, get_preset
 from .settings import Settings
 from .sources import is_url
+from .theme import FONT_BOLD, FONT_MD, FONT_SM, c
 from .winutil import resource_path, use_utf8_console
 
 try:
@@ -30,11 +35,8 @@ except Exception:                                    # 패키지가 없어도 �
     TkinterDnD = None
     HAS_DND = False
 
-PAD = 8
+PAD = 10
 THUMB = 96               # 최근 탭 썸네일 한 변 (기본 창 폭에서 3열)
-CELL_BG = "#ffffff"
-SELECT_BG = "#5865f2"
-SELECT_SOFT = "#eef1ff"
 FPS_CHOICES = ["원본", "10", "12", "15", "20", "24", "30"]
 WIDTH_CHOICES = ["원본", "240", "320", "480", "640", "800", "1080", "1280"]
 
@@ -59,7 +61,7 @@ def _mb_text(value):
         value = float(value or 0)
     except (TypeError, ValueError):
         return "0"
-    return ("%g" % value)
+    return "%g" % value
 
 
 def _to_float(text, default=0.0):
@@ -110,14 +112,16 @@ class App:
         self.queue = queue.Queue()
         self.busy = False
         self._had_source_error = False
+        self.settings_window = None
+        self.icon_path = resource_path("assets/GifBox.ico")
 
         self.root = (TkinterDnD.Tk() if HAS_DND else tk.Tk())
         self.root.title("GifBox")
-        self.root.minsize(380, 460)
         try:
-            self.root.iconbitmap(str(resource_path("assets/GifBox.ico")))
+            self.root.iconbitmap(str(self.icon_path))
         except tk.TclError:
             pass
+        self.style = theme.apply(self.root)
         if self.settings.geometry:
             try:
                 self.root.geometry(self.settings.geometry)
@@ -140,477 +144,149 @@ class App:
         need_h = self.root.winfo_reqheight()
         self.root.minsize(need_w, need_h)
 
-        cur_w = self.root.winfo_width()
-        cur_h = self.root.winfo_height()
-        if cur_w <= 1 or cur_h <= 1:          # 아직 배치 전이면 요구 크기로
+        cur_w, cur_h = self.root.winfo_width(), self.root.winfo_height()
+        if cur_w <= 1 or cur_h <= 1:
             cur_w, cur_h = need_w, need_h
-        want_w, want_h = max(cur_w, need_w), max(cur_h, need_h)
-        if (want_w, want_h) != (cur_w, cur_h) or not self.settings.geometry:
-            self.root.geometry("%dx%d" % (want_w, want_h))
+        want = (max(cur_w, need_w), max(cur_h, need_h))
+        if want != (cur_w, cur_h) or not self.settings.geometry:
+            self.root.geometry("%dx%d" % want)
 
     # ------------------------------------------------------------ 화면 구성
 
     def _build(self):
-        root = self.root
-        style = ttk.Style()
-        try:
-            style.theme_use("vista")
-        except tk.TclError:
-            pass
-
-        outer = ttk.Frame(root, padding=PAD)
+        outer = ttk.Frame(self.root, padding=PAD)
         outer.pack(fill="both", expand=True)
 
-        # --- 프리셋 ----------------------------------------------------
-        prow = ttk.Frame(outer)
-        prow.pack(fill="x", pady=(0, 6))
-        ttk.Label(prow, text="프리셋").pack(side="left")
+        self._build_header(outer)
+        self._build_drop(outer)
+        self._build_url(outer)
+        self._build_options(outer)
+        self._build_tabs(outer)
+        self._build_footer(outer)
+
+        self._show_preset(self.settings.preset)
+        self._greet()
+
+    def _build_header(self, outer):
+        row = ttk.Frame(outer)
+        row.pack(fill="x")
+        ttk.Label(row, text="프리셋", style="Muted.TLabel").pack(side="left")
         self.var_preset = tk.StringVar()
         self.preset_box = ttk.Combobox(
-            prow, textvariable=self.var_preset, state="readonly",
+            row, textvariable=self.var_preset, state="readonly",
             values=[p.title for p in all_presets()])
-        self.preset_box.pack(side="left", fill="x", expand=True, padx=(4, 0))
+        self.preset_box.pack(side="left", fill="x", expand=True, padx=(8, 8))
         self.preset_box.bind("<<ComboboxSelected>>", self.on_preset_change)
-        self.preset_hint = ttk.Label(outer, text="", foreground="#7a8699")
-        self.preset_hint.pack(fill="x", pady=(0, 4))
+        ttk.Button(row, text="⚙ 설정", style="Ghost.TButton", width=8,
+                   command=self.open_settings).pack(side="left")
 
-        # --- 드롭 영역 -------------------------------------------------
+        self.preset_hint = ttk.Label(outer, text="", style="Dim.TLabel")
+        self.preset_hint.pack(fill="x", pady=(3, 0))
+
+    def _build_drop(self, outer):
         self.drop = tk.Label(
             outer,
             text=("여기에 끌어다 놓으세요\n\n"
                   "내 파일 (webp · mp4 · mov · webm …)\n"
                   "또는 브라우저에서 이미지를 그대로 드래그"),
-            justify="center", relief="ridge", bd=2, padx=10, pady=20,
-            bg="#f4f6f8", fg="#44506a",
+            justify="center", padx=10, pady=18,
+            bg=c("bg_deep"), fg=c("muted"), font=FONT_MD,
+            bd=0, highlightthickness=2, highlightbackground=c("border"),
+            highlightcolor=c("border"),
         )
         # expand 하지 않는다 — 남는 세로 공간은 '최근' 격자가 써야 유용하다
-        self.drop.pack(fill="x")
-        self._drop_idle_bg = "#f4f6f8"
+        self.drop.pack(fill="x", pady=(PAD, 0))
 
-        # --- 주소로 가져오기 -------------------------------------------
-        urlrow = ttk.Frame(outer)
-        urlrow.pack(fill="x", pady=(6, 0))
-        ttk.Label(urlrow, text="주소").pack(side="left")
+    def _build_url(self, outer):
+        row = ttk.Frame(outer)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Label(row, text="주소", style="Muted.TLabel").pack(side="left")
         self.var_url = tk.StringVar()
-        entry = ttk.Entry(urlrow, textvariable=self.var_url)
-        entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
+        entry = ttk.Entry(row, textvariable=self.var_url)
+        entry.pack(side="left", fill="x", expand=True, padx=(8, 6))
         entry.bind("<Return>", lambda e: self.fetch_url())
-        ttk.Button(urlrow, text="가져오기", width=9,
+        ttk.Button(row, text="가져오기", style="Ghost.TButton", width=9,
                    command=self.fetch_url).pack(side="left")
 
-        # --- 옵션 ------------------------------------------------------
-        opts = ttk.LabelFrame(outer, text="옵션", padding=PAD)
-        opts.pack(fill="x", pady=(PAD, 0))
-
-        row = ttk.Frame(opts)
-        row.pack(fill="x")
+    def _build_options(self, outer):
+        box = ttk.LabelFrame(outer, text=" 변환 ", padding=PAD)
+        box.pack(fill="x", pady=(PAD, 0))
 
         self.var_fps = tk.StringVar(value=_to_choice(self.settings.fps))
         self.var_width = tk.StringVar(value=_to_choice(self.settings.width))
         self.var_colors = tk.StringVar(value=str(self.settings.colors))
-
-        ttk.Label(row, text="FPS").pack(side="left")
-        ttk.Combobox(row, textvariable=self.var_fps, values=FPS_CHOICES,
-                     width=6).pack(side="left", padx=(4, 12))
-        ttk.Label(row, text="가로").pack(side="left")
-        ttk.Combobox(row, textvariable=self.var_width, values=WIDTH_CHOICES,
-                     width=7).pack(side="left", padx=(4, 2))
-        ttk.Label(row, text="px").pack(side="left", padx=(0, 12))
-        ttk.Label(row, text="색상").pack(side="left")
-        ttk.Spinbox(row, textvariable=self.var_colors, from_=2, to=256,
-                    width=5).pack(side="left", padx=(4, 0))
-
-        # 자르기 · 목표 용량
-        row_trim = ttk.Frame(opts)
-        row_trim.pack(fill="x", pady=(6, 0))
         self.var_start = tk.StringVar(value=self.settings.trim_start)
         self.var_dur = tk.StringVar(value=self.settings.trim_duration)
         self.var_target = tk.StringVar(value=_mb_text(self.settings.target_mb))
 
-        ttk.Label(row_trim, text="자르기 시작").pack(side="left")
-        e1 = ttk.Entry(row_trim, textvariable=self.var_start, width=7)
-        e1.pack(side="left", padx=(4, 6))
-        ttk.Label(row_trim, text="길이").pack(side="left")
-        e2 = ttk.Entry(row_trim, textvariable=self.var_dur, width=6)
-        e2.pack(side="left", padx=(4, 10))
-        ttk.Label(row_trim, text="목표").pack(side="left")
-        ttk.Entry(row_trim, textvariable=self.var_target, width=5).pack(side="left",
-                                                                       padx=(4, 2))
-        ttk.Label(row_trim, text="MB").pack(side="left")
+        row = ttk.Frame(box)
+        row.pack(fill="x")
+        ttk.Label(row, text="FPS", style="Muted.TLabel").pack(side="left")
+        ttk.Combobox(row, textvariable=self.var_fps, values=FPS_CHOICES,
+                     width=6).pack(side="left", padx=(6, 12))
+        ttk.Label(row, text="가로", style="Muted.TLabel").pack(side="left")
+        ttk.Combobox(row, textvariable=self.var_width, values=WIDTH_CHOICES,
+                     width=7).pack(side="left", padx=(6, 2))
+        ttk.Label(row, text="px", style="Dim.TLabel").pack(side="left", padx=(0, 12))
+        ttk.Label(row, text="색상", style="Muted.TLabel").pack(side="left")
+        ttk.Spinbox(row, textvariable=self.var_colors, from_=2, to=256,
+                    width=5).pack(side="left", padx=(6, 0))
+
+        row2 = ttk.Frame(box)
+        row2.pack(fill="x", pady=(8, 0))
+        ttk.Label(row2, text="자르기", style="Muted.TLabel").pack(side="left")
+        e1 = ttk.Entry(row2, textvariable=self.var_start, width=7)
+        e1.pack(side="left", padx=(6, 4))
+        ttk.Label(row2, text="부터", style="Dim.TLabel").pack(side="left")
+        e2 = ttk.Entry(row2, textvariable=self.var_dur, width=6)
+        e2.pack(side="left", padx=(4, 4))
+        ttk.Label(row2, text="동안", style="Dim.TLabel").pack(side="left", padx=(0, 12))
+        ttk.Label(row2, text="목표", style="Muted.TLabel").pack(side="left")
+        ttk.Entry(row2, textvariable=self.var_target, width=5).pack(side="left",
+                                                                   padx=(6, 3))
+        ttk.Label(row2, text="MB", style="Dim.TLabel").pack(side="left")
         for widget in (e1, e2):
             widget.bind("<FocusOut>", self._normalize_trim)
 
-        ttk.Label(opts, text="0:12 / 4 처럼 · 비우면 전체 · 목표 0이면 제한 없음",
-                  foreground="#7a8699").pack(anchor="w", pady=(2, 0))
+        ttk.Label(box, text="0:12 / 4 처럼 · 비우면 전체 · 목표 0이면 제한 없음",
+                  style="Dim.TLabel").pack(anchor="w", pady=(6, 0))
 
-        self.var_clip = tk.BooleanVar(value=self.settings.copy_to_clipboard)
-        self.var_del = tk.BooleanVar(value=self.settings.delete_original)
-        self.var_top = tk.BooleanVar(value=self.settings.always_on_top)
-        self.var_open = tk.BooleanVar(value=self.settings.open_folder_after)
-        self.var_reenc = tk.BooleanVar(value=self.settings.reencode_gif)
-
-        ttk.Checkbutton(opts, text="변환 후 클립보드에 복사 (바로 Ctrl+V)",
-                        variable=self.var_clip).pack(anchor="w", pady=(6, 0))
-        ttk.Checkbutton(opts, text="원본을 휴지통으로 보내기",
-                        variable=self.var_del).pack(anchor="w")
-
-        row2 = ttk.Frame(opts)
-        row2.pack(fill="x", pady=(2, 0))
-        ttk.Checkbutton(row2, text="항상 위", variable=self.var_top,
-                        command=self._apply_topmost).pack(side="left")
-        ttk.Checkbutton(row2, text="끝나면 폴더 열기",
-                        variable=self.var_open).pack(side="left", padx=(12, 0))
-        ttk.Checkbutton(row2, text="GIF 다시 인코딩",
-                        variable=self.var_reenc).pack(side="left", padx=(12, 0))
-
-        # --- 로그 / 최근 ------------------------------------------------
+    def _build_tabs(self, outer):
         tabs = ttk.Notebook(outer)
         tabs.pack(fill="both", expand=True, pady=(PAD, 0))
         self.tabs = tabs
 
-        logwrap = ttk.Frame(tabs, padding=2)
-        tabs.add(logwrap, text="로그")
+        logwrap = ttk.Frame(tabs, padding=(0, 6, 0, 0))
+        tabs.add(logwrap, text="  로그  ")
         # width 를 지정하지 않으면 Text 가 기본 80자를 요구해 창이 쓸데없이 넓어진다
         self.log = tk.Text(logwrap, height=7, width=30, wrap="word",
-                           state="disabled", bd=1, relief="solid", padx=6, pady=4,
-                           font=("Malgun Gothic", 9))
+                           state="disabled", bd=0, highlightthickness=0,
+                           padx=8, pady=6, font=FONT_MD,
+                           bg=c("bg_deep"), fg=c("text"),
+                           insertbackground=c("text"),
+                           selectbackground=c("accent"))
         self.log.pack(side="left", fill="both", expand=True)
         bar = ttk.Scrollbar(logwrap, command=self.log.yview)
         bar.pack(side="right", fill="y")
         self.log.configure(yscrollcommand=bar.set)
-        self.log.tag_configure("ok", foreground="#1a7f37")
-        self.log.tag_configure("err", foreground="#c0392b")
-        self.log.tag_configure("dim", foreground="#7a8699")
+        self.log.tag_configure("ok", foreground=c("green"))
+        self.log.tag_configure("err", foreground=c("red"))
+        self.log.tag_configure("dim", foreground=c("dim"))
+        self.log.tag_configure("warn", foreground=c("yellow"))
 
-        recent = ttk.Frame(tabs, padding=2)
-        tabs.add(recent, text="최근")
+        recent = ttk.Frame(tabs, padding=(0, 6, 0, 0))
+        tabs.add(recent, text="  최근  ")
         self._build_recent(recent)
 
-        # --- 버튼 ------------------------------------------------------
-        btns = ttk.Frame(outer)
-        btns.pack(fill="x", pady=(PAD, 0))
-        ttk.Button(btns, text="파일 선택…", command=self.choose_files).pack(side="left")
-        ttk.Button(btns, text="붙여넣기 (Ctrl+V)",
+    def _build_footer(self, outer):
+        row = ttk.Frame(outer)
+        row.pack(fill="x", pady=(PAD, 0))
+        ttk.Button(row, text="파일 선택…", style="Accent.TButton",
+                   command=self.choose_files).pack(side="left")
+        ttk.Button(row, text="붙여넣기", style="Ghost.TButton",
                    command=self.paste_and_convert).pack(side="left", padx=6)
-        self.status = ttk.Label(btns, text="", foreground="#7a8699")
+        self.status = ttk.Label(row, text="", style="Dim.TLabel")
         self.status.pack(side="right")
-
-        self._apply_topmost()
-        self._show_preset(self.settings.preset)
-        self._greet()
-
-    # ------------------------------------------------------------ 프리셋
-
-    def _sync_widgets(self):
-        """self.settings 값을 화면 위젯으로 밀어넣는다 (프리셋 적용 후 등)."""
-        s = self.settings
-        self.var_fps.set(_to_choice(s.fps))
-        self.var_width.set(_to_choice(s.width))
-        self.var_colors.set(str(s.colors))
-        self.var_target.set(_mb_text(s.target_mb))
-        self.var_start.set(s.trim_start)
-        self.var_dur.set(s.trim_duration)
-        self.var_reenc.set(s.reencode_gif)
-
-    def _show_preset(self, name):
-        preset = get_preset(name)
-        if preset:
-            self.var_preset.set(preset.title)
-            self.preset_hint.configure(text=preset.description)
-        else:
-            self.var_preset.set("")
-            self.preset_hint.configure(text="직접 설정")
-
-    def on_preset_change(self, event=None):
-        preset = get_preset(self.var_preset.get())
-        if not preset:
-            return
-        self.settings.update(preset.values)
-        self.settings["preset"] = preset.name
-        self.settings.normalize()
-        self._sync_widgets()
-        self.preset_hint.configure(text=preset.description)
-        self._write("%s 적용 — %s" % (preset.title, preset.description), "dim")
-
-    def _normalize_trim(self, event=None):
-        """0:12 / 4 / 1:02.5 를 받아 보기 좋게 되돌려 준다."""
-        for var in (self.var_start, self.var_dur):
-            text = var.get().strip()
-            if text:
-                var.set(format_time(parse_time(text)) or "")
-
-    # ------------------------------------------------------------ 최근 기록
-
-    def _build_recent(self, parent):
-        """썸네일 격자. 이름만 봐서는 어떤 GIF인지 모르니 그림으로 고르게 한다."""
-        wrap = ttk.Frame(parent)
-        wrap.pack(fill="both", expand=True)
-
-        self.hist_canvas = tk.Canvas(wrap, bd=1, relief="solid",
-                                     highlightthickness=0, bg=CELL_BG,
-                                     width=THUMB * 3, height=THUMB * 2 + 40)
-        self.hist_canvas.pack(side="left", fill="both", expand=True)
-        hbar = ttk.Scrollbar(wrap, command=self.hist_canvas.yview)
-        hbar.pack(side="right", fill="y")
-        self.hist_canvas.configure(yscrollcommand=hbar.set)
-
-        self.hist_inner = tk.Frame(self.hist_canvas, bg=CELL_BG)
-        self._inner_id = self.hist_canvas.create_window(
-            (0, 0), window=self.hist_inner, anchor="nw")
-        self.hist_inner.bind(
-            "<Configure>",
-            lambda e: self.hist_canvas.configure(
-                scrollregion=self.hist_canvas.bbox("all")))
-        self.hist_canvas.bind("<Configure>", self._on_recent_resize)
-        self._bind_wheel(self.hist_canvas)
-
-        self.hist_empty = tk.Label(self.hist_inner, bg=CELL_BG, fg="#7a8699",
-                                   text="아직 만든 GIF가 없습니다")
-
-        btn = ttk.Frame(parent)
-        btn.pack(fill="x", pady=(4, 0))
-        ttk.Button(btn, text="📋 복사", width=9,
-                   command=self.history_copy).pack(side="left")
-        ttk.Button(btn, text="📂 폴더", width=9,
-                   command=self.history_reveal).pack(side="left", padx=4)
-        self.hist_count = ttk.Label(btn, text="", foreground="#7a8699")
-        self.hist_count.pack(side="left", padx=(6, 0))
-        ttk.Button(btn, text="🧹 비우기", width=10,
-                   command=self.history_clear).pack(side="right")
-
-        self.history = []
-        self.cells = []
-        self.selected = -1
-        self._thumb_token = 0
-        self._hover = None
-        self._hover_job = None
-        self._hover_frames = []
-        self._placeholder = None
-        self._columns = 0
-        self.refresh_history()
-
-    def _bind_wheel(self, widget):
-        widget.bind("<MouseWheel>",
-                    lambda e: self.hist_canvas.yview_scroll(
-                        -1 if e.delta > 0 else 1, "units"))
-
-    def _make_placeholder(self):
-        if self._placeholder is None:
-            from PIL import Image, ImageTk
-            self._placeholder = ImageTk.PhotoImage(
-                Image.new("RGB", (THUMB, THUMB), (232, 236, 241)))
-        return self._placeholder
-
-    def refresh_history(self):
-        self.history = history_mod.load()
-        for cell in self.cells:
-            cell["frame"].destroy()
-        self.cells = []
-        self.selected = -1
-        self._stop_hover()
-
-        self.hist_count.configure(text=("%d개" % len(self.history))
-                                  if self.history else "")
-        if not self.history:
-            self.hist_empty.pack(padx=12, pady=12)
-            return
-        self.hist_empty.pack_forget()
-
-        for idx, entry in enumerate(self.history):
-            self.cells.append(self._make_cell(idx, entry))
-        self._columns = 0
-        self._reflow()
-        self._request_thumbs()
-
-    def _make_cell(self, idx, entry):
-        frame = tk.Frame(self.hist_inner, bg=CELL_BG, bd=2, relief="flat",
-                         highlightthickness=1, highlightbackground=CELL_BG)
-        image = tk.Label(frame, image=self._make_placeholder(), bd=0,
-                         bg="#e8ecf1", cursor="hand2")
-        image.pack()
-        name = entry.name or Path(entry.path).name
-        if len(name) > 16:
-            name = name[:14] + "…"
-        caption = tk.Label(frame, text=name, bg=CELL_BG, fg="#44506a",
-                           font=("Malgun Gothic", 8), width=14)
-        caption.pack(pady=(2, 0))
-        size = tk.Label(frame, bg=CELL_BG, fg="#8a93a6",
-                        font=("Malgun Gothic", 8),
-                        text=("%s %s" % (entry.icon, human(entry.size))
-                              if entry.size else entry.icon))
-        size.pack()
-
-        cell = {"frame": frame, "image": image, "entry": entry, "photo": None}
-        for widget in (frame, image, caption, size):
-            widget.bind("<Button-1>", lambda e, i=idx: self._select_cell(i))
-            widget.bind("<Double-Button-1>", lambda e, i=idx: self._open_cell(i))
-            widget.bind("<Enter>", lambda e, i=idx: self._start_hover(i))
-            widget.bind("<Leave>", lambda e, i=idx: self._maybe_stop_hover(i))
-            self._bind_wheel(widget)
-        return cell
-
-    def _on_recent_resize(self, event):
-        self.hist_canvas.itemconfigure(self._inner_id, width=event.width)
-        self._reflow(event.width)
-
-    def _reflow(self, width=None):
-        if not self.cells:
-            return
-        if width is None:
-            width = self.hist_canvas.winfo_width()
-        cols = max(1, int(width) // (THUMB + 18))
-        if cols == self._columns:
-            return
-        self._columns = cols
-        for i, cell in enumerate(self.cells):
-            cell["frame"].grid(row=i // cols, column=i % cols, padx=3, pady=3)
-
-    # -- 썸네일 굽기 (창이 멈추지 않게 별도 스레드) ----------------------
-
-    def _request_thumbs(self):
-        self._thumb_token += 1
-        token = self._thumb_token
-        entries = list(self.history)
-
-        def work():
-            from . import thumbs as thumbs_mod
-            for idx, entry in enumerate(entries):
-                path = thumbs_mod.get_thumb(entry.path) if entry.exists else None
-                self.queue.put(("thumb", {"token": token, "index": idx,
-                                          "path": path}))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _apply_thumb(self, data):
-        if data["token"] != self._thumb_token:
-            return                      # 그 사이에 목록이 바뀌었다
-        idx, path = data["index"], data["path"]
-        if idx >= len(self.cells) or not path:
-            return
-        try:
-            from PIL import Image, ImageTk
-            with Image.open(path) as im:
-                photo = ImageTk.PhotoImage(im.copy())
-        except Exception:
-            return
-        cell = self.cells[idx]
-        cell["photo"] = photo           # 참조를 붙들고 있어야 안 지워진다
-        cell["image"].configure(image=photo)
-
-    # -- 마우스를 올리면 움직이는 미리보기 -------------------------------
-
-    def _start_hover(self, idx):
-        if idx == self._hover or idx >= len(self.cells):
-            return
-        self._stop_hover()
-        entry = self.cells[idx]["entry"]
-        if not entry.exists:
-            return
-        self._hover = idx
-        # 프레임 읽기는 무거우니 백그라운드에서
-        token = self._thumb_token
-
-        def work():
-            from . import thumbs as thumbs_mod
-            frames = thumbs_mod.load_frames(entry.path)
-            self.queue.put(("hover", {"token": token, "index": idx,
-                                      "frames": frames}))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _begin_animation(self, data):
-        if (data["token"] != self._thumb_token or data["index"] != self._hover
-                or not data["frames"]):
-            return
-        try:
-            from PIL import ImageTk
-            self._hover_frames = [(ImageTk.PhotoImage(img), delay)
-                                  for img, delay in data["frames"]]
-        except Exception:
-            self._hover_frames = []
-            return
-        self._animate(0)
-
-    def _animate(self, step):
-        if self._hover is None or not self._hover_frames:
-            return
-        if self._hover >= len(self.cells):
-            return
-        photo, delay = self._hover_frames[step % len(self._hover_frames)]
-        self.cells[self._hover]["image"].configure(image=photo)
-        self._hover_job = self.root.after(
-            int(delay), lambda: self._animate(step + 1))
-
-    def _maybe_stop_hover(self, idx):
-        if idx == self._hover:
-            self._stop_hover()
-
-    def _stop_hover(self):
-        if self._hover_job is not None:
-            try:
-                self.root.after_cancel(self._hover_job)
-            except Exception:
-                pass
-            self._hover_job = None
-        if self._hover is not None and self._hover < len(self.cells):
-            cell = self.cells[self._hover]
-            cell["image"].configure(image=cell["photo"] or self._make_placeholder())
-        self._hover = None
-        self._hover_frames = []          # 메모리 붙들고 있지 않게 놓아준다
-
-    # -- 선택 / 동작 -----------------------------------------------------
-
-    def _select_cell(self, idx):
-        for i, cell in enumerate(self.cells):
-            on = (i == idx)
-            cell["frame"].configure(highlightbackground=SELECT_BG if on else CELL_BG,
-                                    bg=SELECT_SOFT if on else CELL_BG)
-            for child in cell["frame"].winfo_children():
-                if child is not cell["image"]:
-                    child.configure(bg=SELECT_SOFT if on else CELL_BG)
-        self.selected = idx
-
-    def _open_cell(self, idx):
-        self._select_cell(idx)
-        self.history_copy()
-
-    def _selected_entry(self):
-        if 0 <= self.selected < len(self.history):
-            return self.history[self.selected]
-        return None
-
-    def history_copy(self):
-        entry = self._selected_entry()
-        if entry is None:
-            self._write("최근 탭에서 썸네일을 하나 고르세요 (더블클릭하면 바로 복사)", "dim")
-            return
-        if not entry.exists:
-            self._write("파일이 없습니다 (옮겼거나 지운 듯): %s" % entry.name, "err")
-            self.history = history_mod.prune()
-            self.refresh_history()
-            return
-        from .clipboard import copy_files
-        try:
-            copy_files([Path(entry.path)], self.settings.clipboard_mode)
-            self._write("📋 %s 복사됨 — 바로 Ctrl+V" % entry.name, "ok")
-        except Exception as e:
-            self._write("복사 실패: %s" % e, "err")
-
-    def history_reveal(self):
-        entry = self._selected_entry()
-        if entry is None or not entry.exists:
-            self._write("최근 탭에서 살아있는 항목을 고르세요", "dim")
-            return
-        from .winutil import reveal
-        reveal(Path(entry.path))
-
-    def history_clear(self):
-        from . import thumbs as thumbs_mod
-
-        history_mod.clear()
-        thumbs_mod.clear_cache()
-        self.refresh_history()
-        self._write("최근 목록을 비웠습니다 (파일은 그대로)", "dim")
 
     def _greet(self):
         if find_ffmpeg():
@@ -634,15 +310,39 @@ class App:
         self.root.bind("<Control-v>", lambda e: self.paste_and_convert())
         self.root.bind("<Control-V>", lambda e: self.paste_and_convert())
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self._apply_topmost()
+
+    # ------------------------------------------------------------ 설정 창
+
+    def open_settings(self):
+        from .settings_dialog import SettingsDialog
+
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            self.settings_window.focus_force()
+            return
+        self.settings_window = SettingsDialog(self)
+
+    def on_settings_changed(self, key):
+        """설정 창에서 값이 바뀌면 본 창에 바로 반영한다."""
+        if key in (None, "always_on_top"):
+            self._apply_topmost()
+        if key in (None, "reencode_gif", "overwrite"):
+            self._show_preset(self.settings.preset)   # 프리셋과 어긋났는지 다시 표시
+
+    def _apply_topmost(self):
+        self.root.attributes("-topmost", bool(self.settings.always_on_top))
 
     # ------------------------------------------------------------ 이벤트
 
     def on_drag_enter(self, event):
-        self.drop.configure(bg="#e3f0ff", fg="#0b5cad")
+        self.drop.configure(bg=c("accent_soft"), fg=c("text"),
+                            highlightbackground=c("accent"))
         return event.action
 
     def on_drag_leave(self, event):
-        self.drop.configure(bg=self._drop_idle_bg, fg="#44506a")
+        self.drop.configure(bg=c("bg_deep"), fg=c("muted"),
+                            highlightbackground=c("border"))
         return event.action
 
     def on_drop(self, event):
@@ -723,8 +423,326 @@ class App:
         self.settings.save()
         self.root.destroy()
 
-    def _apply_topmost(self):
-        self.root.attributes("-topmost", bool(self.var_top.get()))
+    # ------------------------------------------------------------ 프리셋
+
+    def _sync_widgets(self):
+        """self.settings 값을 화면 위젯으로 밀어넣는다 (프리셋 적용 후 등)."""
+        s = self.settings
+        self.var_fps.set(_to_choice(s.fps))
+        self.var_width.set(_to_choice(s.width))
+        self.var_colors.set(str(s.colors))
+        self.var_target.set(_mb_text(s.target_mb))
+        self.var_start.set(s.trim_start)
+        self.var_dur.set(s.trim_duration)
+
+    def _show_preset(self, name):
+        preset = get_preset(name)
+        if preset:
+            self.var_preset.set(preset.title)
+            self.preset_hint.configure(text=preset.description)
+        else:
+            self.var_preset.set("")
+            self.preset_hint.configure(text="직접 설정")
+
+    def on_preset_change(self, event=None):
+        preset = get_preset(self.var_preset.get())
+        if not preset:
+            return
+        self.settings.update(preset.values)
+        self.settings["preset"] = preset.name
+        self.settings.normalize()
+        self._sync_widgets()
+        self.preset_hint.configure(text=preset.description)
+        self._write("%s 적용 — %s" % (preset.title, preset.description), "dim")
+
+    def _normalize_trim(self, event=None):
+        """0:12 / 4 / 1:02.5 를 받아 보기 좋게 되돌려 준다."""
+        for var in (self.var_start, self.var_dur):
+            text = var.get().strip()
+            if text:
+                var.set(format_time(parse_time(text)) or "")
+
+    # ------------------------------------------------------------ 최근 기록
+
+    def _build_recent(self, parent):
+        """썸네일 격자. 이름만 봐서는 어떤 GIF인지 모르니 그림으로 고르게 한다."""
+        wrap = ttk.Frame(parent)
+        wrap.pack(fill="both", expand=True)
+
+        self.hist_canvas = tk.Canvas(wrap, bd=0, highlightthickness=0,
+                                     bg=c("bg_alt"),
+                                     width=THUMB * 3, height=THUMB * 2 + 40)
+        self.hist_canvas.pack(side="left", fill="both", expand=True)
+        bar = ttk.Scrollbar(wrap, command=self.hist_canvas.yview)
+        bar.pack(side="right", fill="y")
+        self.hist_canvas.configure(yscrollcommand=bar.set)
+
+        self.hist_inner = tk.Frame(self.hist_canvas, bg=c("bg_alt"))
+        self._inner_id = self.hist_canvas.create_window(
+            (0, 0), window=self.hist_inner, anchor="nw")
+        self.hist_inner.bind(
+            "<Configure>",
+            lambda e: self.hist_canvas.configure(
+                scrollregion=self.hist_canvas.bbox("all")))
+        self.hist_canvas.bind("<Configure>", self._on_recent_resize)
+
+        self.hist_empty = tk.Label(self.hist_inner, bg=c("bg_alt"), fg=c("dim"),
+                                   font=FONT_MD, text="아직 만든 GIF가 없습니다")
+
+        btn = ttk.Frame(parent)
+        btn.pack(fill="x", pady=(6, 0))
+        ttk.Button(btn, text="📋 복사", style="Accent.TButton",
+                   command=self.history_copy).pack(side="left")
+        ttk.Button(btn, text="📂 폴더", style="Ghost.TButton",
+                   command=self.history_reveal).pack(side="left", padx=6)
+        self.hist_count = ttk.Label(btn, text="", style="Dim.TLabel")
+        self.hist_count.pack(side="left", padx=(4, 0))
+        ttk.Button(btn, text="🧹 비우기", style="Ghost.TButton",
+                   command=self.history_clear).pack(side="right")
+
+        self.history = []
+        self.cells = []
+        self.selected = -1
+        self._thumb_token = 0
+        self._hover = None
+        self._hover_job = None
+        self._hover_frames = []
+        self._placeholder = None
+        self._columns = 0
+
+        # 빈 곳에서도 휠이 먹도록 캔버스와 안쪽 프레임 모두에 건다
+        for widget in (wrap, self.hist_canvas, self.hist_inner, self.hist_empty):
+            self._bind_wheel(widget)
+        self.refresh_history()
+
+    def _on_wheel(self, event):
+        self.hist_canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        return "break"
+
+    def _bind_wheel(self, widget, recurse=False):
+        """휠 스크롤 연결. 칸 위든 빈 곳이든 어디서나 먹게."""
+        widget.bind("<MouseWheel>", self._on_wheel)
+        if recurse:
+            for child in widget.winfo_children():
+                self._bind_wheel(child, recurse=True)
+
+    def _make_placeholder(self):
+        if self._placeholder is None:
+            from PIL import Image, ImageTk
+            from . import thumbs as thumbs_mod
+            self._placeholder = ImageTk.PhotoImage(
+                Image.new("RGB", (THUMB, THUMB), thumbs_mod.BG))
+        return self._placeholder
+
+    def refresh_history(self):
+        self.history = history_mod.load()
+        for cell in self.cells:
+            cell["frame"].destroy()
+        self.cells = []
+        self.selected = -1
+        self._stop_hover()
+
+        self.hist_count.configure(text=("%d개" % len(self.history))
+                                  if self.history else "")
+        if not self.history:
+            self.hist_empty.pack(padx=14, pady=14)
+            return
+        self.hist_empty.pack_forget()
+
+        for idx, entry in enumerate(self.history):
+            self.cells.append(self._make_cell(idx, entry))
+        self._columns = 0
+        self._reflow()
+        self._request_thumbs()
+
+    def _make_cell(self, idx, entry):
+        frame = tk.Frame(self.hist_inner, bg=c("bg_alt"), bd=0,
+                         highlightthickness=2, highlightbackground=c("bg_alt"))
+        image = tk.Label(frame, image=self._make_placeholder(), bd=0,
+                         bg=c("bg_deep"), cursor="hand2")
+        image.pack()
+        name = entry.name or Path(entry.path).name
+        if len(name) > 15:
+            name = name[:13] + "…"
+        caption = tk.Label(frame, text=name, bg=c("bg_alt"), fg=c("text"),
+                           font=FONT_SM, width=14)
+        caption.pack(pady=(3, 0))
+        meta = tk.Label(frame, bg=c("bg_alt"), fg=c("dim"), font=FONT_SM,
+                        text=("%s %s" % (entry.icon, human(entry.size))
+                              if entry.size else entry.icon))
+        meta.pack()
+
+        cell = {"frame": frame, "image": image, "caption": caption,
+                "meta": meta, "entry": entry, "photo": None}
+        for widget in (frame, image, caption, meta):
+            widget.bind("<Button-1>", lambda e, i=idx: self._select_cell(i))
+            widget.bind("<Double-Button-1>", lambda e, i=idx: self._open_cell(i))
+            widget.bind("<Enter>", lambda e, i=idx: self._start_hover(i))
+            widget.bind("<Leave>", lambda e, i=idx: self._maybe_stop_hover(i))
+            self._bind_wheel(widget)
+        return cell
+
+    def _on_recent_resize(self, event):
+        self.hist_canvas.itemconfigure(self._inner_id, width=event.width)
+        self._reflow(event.width)
+
+    def _reflow(self, width=None):
+        if not self.cells:
+            return
+        if width is None:
+            width = self.hist_canvas.winfo_width()
+        cols = max(1, int(width) // (THUMB + 20))
+        if cols == self._columns:
+            return
+        self._columns = cols
+        for i, cell in enumerate(self.cells):
+            cell["frame"].grid(row=i // cols, column=i % cols, padx=4, pady=4)
+
+    # -- 썸네일 굽기 (창이 멈추지 않게 별도 스레드) ----------------------
+
+    def _request_thumbs(self):
+        self._thumb_token += 1
+        token = self._thumb_token
+        entries = list(self.history)
+
+        def work():
+            from . import thumbs as thumbs_mod
+            for idx, entry in enumerate(entries):
+                path = thumbs_mod.get_thumb(entry.path) if entry.exists else None
+                self.queue.put(("thumb", {"token": token, "index": idx,
+                                          "path": path}))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_thumb(self, data):
+        if data["token"] != self._thumb_token:
+            return                      # 그 사이에 목록이 바뀌었다
+        idx, path = data["index"], data["path"]
+        if idx >= len(self.cells) or not path:
+            return
+        try:
+            from PIL import Image, ImageTk
+            with Image.open(path) as im:
+                photo = ImageTk.PhotoImage(im.copy())
+        except Exception:
+            return
+        cell = self.cells[idx]
+        cell["photo"] = photo           # 참조를 붙들고 있어야 안 지워진다
+        cell["image"].configure(image=photo)
+
+    # -- 마우스를 올리면 움직이는 미리보기 -------------------------------
+
+    def _start_hover(self, idx):
+        if idx == self._hover or idx >= len(self.cells):
+            return
+        self._stop_hover()
+        entry = self.cells[idx]["entry"]
+        if not entry.exists:
+            return
+        self._hover = idx
+        token = self._thumb_token
+
+        def work():                      # 프레임 읽기는 무거우니 백그라운드에서
+            from . import thumbs as thumbs_mod
+            frames = thumbs_mod.load_frames(entry.path)
+            self.queue.put(("hover", {"token": token, "index": idx,
+                                      "frames": frames}))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _begin_animation(self, data):
+        if (data["token"] != self._thumb_token or data["index"] != self._hover
+                or not data["frames"]):
+            return
+        try:
+            from PIL import ImageTk
+            self._hover_frames = [(ImageTk.PhotoImage(img), delay)
+                                  for img, delay in data["frames"]]
+        except Exception:
+            self._hover_frames = []
+            return
+        self._animate(0)
+
+    def _animate(self, step):
+        if self._hover is None or not self._hover_frames:
+            return
+        if self._hover >= len(self.cells):
+            return
+        photo, delay = self._hover_frames[step % len(self._hover_frames)]
+        self.cells[self._hover]["image"].configure(image=photo)
+        self._hover_job = self.root.after(
+            int(delay), lambda: self._animate(step + 1))
+
+    def _maybe_stop_hover(self, idx):
+        if idx == self._hover:
+            self._stop_hover()
+
+    def _stop_hover(self):
+        if self._hover_job is not None:
+            try:
+                self.root.after_cancel(self._hover_job)
+            except Exception:
+                pass
+            self._hover_job = None
+        if self._hover is not None and self._hover < len(self.cells):
+            cell = self.cells[self._hover]
+            cell["image"].configure(image=cell["photo"] or self._make_placeholder())
+        self._hover = None
+        self._hover_frames = []          # 메모리 붙들고 있지 않게 놓아준다
+
+    # -- 선택 / 동작 -----------------------------------------------------
+
+    def _select_cell(self, idx):
+        for i, cell in enumerate(self.cells):
+            on = (i == idx)
+            bg = c("accent_soft") if on else c("bg_alt")
+            cell["frame"].configure(bg=bg,
+                                    highlightbackground=c("accent") if on else bg)
+            cell["caption"].configure(bg=bg, fg=c("white") if on else c("text"))
+            cell["meta"].configure(bg=bg)
+        self.selected = idx
+
+    def _open_cell(self, idx):
+        self._select_cell(idx)
+        self.history_copy()
+
+    def _selected_entry(self):
+        if 0 <= self.selected < len(self.history):
+            return self.history[self.selected]
+        return None
+
+    def history_copy(self):
+        entry = self._selected_entry()
+        if entry is None:
+            self._write("최근 탭에서 썸네일을 하나 고르세요 (더블클릭하면 바로 복사)", "dim")
+            return
+        if not entry.exists:
+            self._write("파일이 없습니다 (옮겼거나 지운 듯): %s" % entry.name, "err")
+            self.history = history_mod.prune()
+            self.refresh_history()
+            return
+        from .clipboard import copy_files
+        try:
+            copy_files([Path(entry.path)], self.settings.clipboard_mode)
+            self._write("📋 %s 복사됨 — 바로 Ctrl+V" % entry.name, "ok")
+        except Exception as e:
+            self._write("복사 실패: %s" % e, "err")
+
+    def history_reveal(self):
+        entry = self._selected_entry()
+        if entry is None or not entry.exists:
+            self._write("최근 탭에서 살아있는 항목을 고르세요", "dim")
+            return
+        from .winutil import reveal
+        reveal(Path(entry.path))
+
+    def history_clear(self):
+        from . import thumbs as thumbs_mod
+
+        history_mod.clear()
+        thumbs_mod.clear_cache()
+        self.refresh_history()
+        self._write("최근 목록을 비웠습니다 (파일은 그대로)", "dim")
 
     # ------------------------------------------------------------ 변환 실행
 
@@ -733,11 +751,6 @@ class App:
         s.fps = _to_num(self.var_fps.get(), 15)
         s.width = _to_num(self.var_width.get(), 0)
         s.colors = _to_num(self.var_colors.get(), 256)
-        s.copy_to_clipboard = self.var_clip.get()
-        s.delete_original = self.var_del.get()
-        s.open_folder_after = self.var_open.get()
-        s.always_on_top = self.var_top.get()
-        s.reencode_gif = self.var_reenc.get()
         s.trim_start = self.var_start.get().strip()
         s.trim_duration = self.var_dur.get().strip()
         s.target_mb = _to_float(self.var_target.get(), 0.0)
@@ -751,7 +764,7 @@ class App:
         self.var_target.set(_mb_text(s.target_mb))
         return s
 
-    def start(self, paths):
+    def start(self, items):
         if self.busy:
             self._write("변환이 끝난 뒤에 다시 시도하세요", "dim")
             return
@@ -762,14 +775,15 @@ class App:
         self.busy = True
         self._had_source_error = False
         self.status.configure(text="처리 중…")
-        self._write("─" * 28, "dim")
+        self._write("─" * 30, "dim")
+        self.tabs.select(0)              # 진행 상황이 보이도록 로그 탭으로
 
         def notify(kind, **data):
             self.queue.put((kind, data))
 
         def work():
             try:
-                convert_many(paths, opts, notify=notify)
+                convert_many(items, opts, notify=notify)
             except Exception as e:
                 notify("fatal", message=str(e))
             finally:
@@ -787,7 +801,13 @@ class App:
         self.root.after(80, self._pump)
 
     def _handle(self, kind, data):
-        if kind == "source_error":
+        if kind == "thumb":
+            self._apply_thumb(data)
+
+        elif kind == "hover":
+            self._begin_animation(data)
+
+        elif kind == "source_error":
             self._had_source_error = True
             self._write("✘ %s" % data["message"], "err")
 
@@ -801,12 +821,6 @@ class App:
 
         elif kind == "file_start":
             self.status.configure(text="변환 중… %d/%d" % (data["index"], data["total"]))
-
-        elif kind == "thumb":
-            self._apply_thumb(data)
-
-        elif kind == "hover":
-            self._begin_animation(data)
 
         elif kind == "shrink":
             self._write("   %s 초과 (%s) — 가로 %d · %gfps · %d색으로 다시 시도"
@@ -831,7 +845,7 @@ class App:
                                human(r.src_size), human(r.dst_size), extra), "ok")
                 if r.target_met is False:
                     self._write("   ⚠ 목표 용량까지는 못 줄였습니다 "
-                                "(더 줄이려면 자르기나 목표값을 조정하세요)", "err")
+                                "(자르기나 목표값을 조정해 보세요)", "warn")
                 if r.temporary:
                     self._write("   저장 위치: %s" % r.dst.parent, "dim")
             else:
@@ -870,7 +884,7 @@ def selftest():
     """
     import tempfile
 
-    from .converters import all_converters, find_ffmpeg
+    from .converters import all_converters
     from .settings import config_path
 
     report = {
@@ -886,7 +900,7 @@ def selftest():
         report["Pillow"] = "실패: %s" % e
 
     report["ffmpeg"] = find_ffmpeg() or "없음"
-    report["엔진"] = [c.name for c in all_converters() if c.available()]
+    report["엔진"] = [x.name for x in all_converters() if x.available()]
 
     # 드래그앤드롭: 모듈만 있는 게 아니라 tkdnd 바이너리까지 살아있는지 본다
     try:
@@ -895,7 +909,8 @@ def selftest():
         if HAS_DND:
             probe = tk.Label(root)
             probe.drop_target_register(DND_FILES, DND_TEXT)
-            report["드래그앤드롭"] = "정상 (tkdnd %s)" % root.tk.call("package", "versions", "tkdnd")
+            report["드래그앤드롭"] = "정상 (tkdnd %s)" % root.tk.call(
+                "package", "versions", "tkdnd")
         else:
             report["드래그앤드롭"] = "비활성 (tkinterdnd2 없음)"
         report["아이콘"] = ("있음" if resource_path("assets/GifBox.ico").exists()
@@ -950,8 +965,7 @@ def main(argv=None):
             pass
 
     app = App()
-    argv = list(argv if argv is not None else sys.argv[1:])
-    if argv:                              # 파일을 인자로 받으면 바로 변환
-        app.root.after(300, lambda: app.start([Path(p) for p in argv]))
+    if argv_probe:                        # 파일을 인자로 받으면 바로 변환
+        app.root.after(300, lambda: app.start([Path(p) for p in argv_probe]))
     app.run()
     return 0

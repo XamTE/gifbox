@@ -15,6 +15,7 @@ from pathlib import Path
 from .settings import config_dir
 
 SIZE = 96                  # 썸네일 한 변 (정사각형 칸에 letterbox)
+BG = (43, 45, 49)          # 남는 여백 색 — 창 테마(bg_alt)와 맞춘다
 HOVER_MAX_FRAMES = 48      # 마우스 올렸을 때 재생할 최대 프레임
 HOVER_MIN_DELAY = 40       # ms
 
@@ -25,17 +26,18 @@ def thumb_dir() -> Path:
     return d
 
 
-def cache_key(path: Path, size):
+def cache_key(path: Path, size, bg):
     try:
         stat = path.stat()
         stamp = "%d-%d" % (stat.st_mtime_ns, stat.st_size)
     except OSError:
         stamp = "none"
-    raw = "%s|%s|%d" % (path.resolve(), stamp, size)
+    # 여백 색도 키에 넣는다 — 테마가 바뀌면 예전 썸네일을 그대로 쓰면 안 된다
+    raw = "%s|%s|%d|%s" % (path.resolve(), stamp, size, bg)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def _fit(img, size, bg=(244, 246, 248)):
+def _fit(img, size, bg=BG):
     """비율 유지하며 정사각형 칸 가운데에 놓는다."""
     from PIL import Image
 
@@ -47,7 +49,7 @@ def _fit(img, size, bg=(244, 246, 248)):
     return canvas.convert("RGB")
 
 
-def get_thumb(path, size=SIZE):
+def get_thumb(path, size=SIZE, bg=BG):
     """첫 프레임 썸네일 파일 경로. 만들 수 없으면 None."""
     from PIL import Image
 
@@ -55,13 +57,13 @@ def get_thumb(path, size=SIZE):
     if not path.is_file():
         return None
 
-    out = thumb_dir() / (cache_key(path, size) + ".png")
+    out = thumb_dir() / (cache_key(path, size, bg) + ".png")
     if out.is_file():
         return out
     try:
         with Image.open(path) as im:
             im.seek(0)
-            thumb = _fit(im, size)
+            thumb = _fit(im, size, bg)
         tmp = out.with_suffix(".png.tmp")
         thumb.save(tmp, "PNG")
         tmp.replace(out)
@@ -70,7 +72,7 @@ def get_thumb(path, size=SIZE):
         return None
 
 
-def load_frames(path, size=SIZE, max_frames=HOVER_MAX_FRAMES):
+def load_frames(path, size=SIZE, max_frames=HOVER_MAX_FRAMES, bg=BG):
     """마우스 올렸을 때 재생할 프레임들. [(PIL.Image, 지연ms), …]"""
     from PIL import Image, ImageSequence
 
@@ -90,7 +92,7 @@ def load_frames(path, size=SIZE, max_frames=HOVER_MAX_FRAMES):
                     continue
                 delay = max(HOVER_MIN_DELAY,
                             (frame.info.get("duration", 0) or 100) * step)
-                out.append((_fit(frame, size), delay))
+                out.append((_fit(frame, size, bg), delay))
                 if len(out) >= max_frames:
                     break
         return out
