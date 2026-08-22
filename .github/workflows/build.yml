@@ -38,10 +38,12 @@ jobs:
         run: python build_exe.py
 
       - name: 자가진단 (슬림)
+        # windowed(GUI) exe 라 그냥 부르면 셸이 종료를 기다리지 않는다.
+        # ffmpeg·tkdnd·ImageTk 가 번들에서 빠지면 종료코드로 알려온다.
         run: |
-          .\dist\GifBox.exe --selftest report-slim.json
-          Get-Content report-slim.json
-        # ffmpeg·tkdnd·ImageTk 가 번들에서 빠지면 여기서 실패합니다
+          $p = Start-Process .\dist\GifBox.exe -ArgumentList "--selftest","report-slim.json" -PassThru -Wait
+          if (Test-Path report-slim.json) { Get-Content report-slim.json }
+          if ($p.ExitCode -ne 0) { throw "자가진단 실패 (종료코드 $($p.ExitCode))" }
 
       - name: 이름 바꿔 보관
         run: |
@@ -65,8 +67,9 @@ jobs:
 
       - name: 자가진단 (ffmpeg 포함)
         run: |
-          .\dist\GifBox.exe --selftest report-full.json
-          Get-Content report-full.json
+          $p = Start-Process .\dist\GifBox.exe -ArgumentList "--selftest","report-full.json" -PassThru -Wait
+          if (Test-Path report-full.json) { Get-Content report-full.json }
+          if ($p.ExitCode -ne 0) { throw "자가진단 실패 (종료코드 $($p.ExitCode))" }
 
       - name: 이름 바꿔 보관
         run: Move-Item dist\GifBox.exe out\GifBox-full.exe
