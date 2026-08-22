@@ -66,10 +66,21 @@ jobs:
         run: python build_exe.py --with-ffmpeg
 
       - name: 자가진단 (ffmpeg 포함)
+        # 저장소 루트에 내려받은 ffmpeg.exe 가 있으면 그걸 잡아버려서
+        # '번들 안의 ffmpeg' 검증이 되지 않는다. 다른 폴더에서 실행시킨다.
         run: |
-          $p = Start-Process .\dist\GifBox.exe -ArgumentList "--selftest","report-full.json" -PassThru -Wait
-          if (Test-Path report-full.json) { Get-Content report-full.json }
+          $exe = (Resolve-Path .\dist\GifBox.exe).Path
+          $rep = Join-Path $env:RUNNER_TEMP "report-full.json"
+          $p = Start-Process $exe -ArgumentList "--selftest",$rep -PassThru -Wait `
+               -WorkingDirectory $env:RUNNER_TEMP
+          if (-not (Test-Path $rep)) { throw "보고서가 생성되지 않았습니다" }
+          Get-Content $rep
           if ($p.ExitCode -ne 0) { throw "자가진단 실패 (종료코드 $($p.ExitCode))" }
+          $found = (Get-Content $rep -Raw | ConvertFrom-Json).ffmpeg
+          if ($found -notmatch "_MEI") {
+            throw "번들 안의 ffmpeg 를 쓰지 않았습니다: $found"
+          }
+          Write-Host "번들 ffmpeg 확인: $found"
 
       - name: 이름 바꿔 보관
         run: Move-Item dist\GifBox.exe out\GifBox-full.exe
