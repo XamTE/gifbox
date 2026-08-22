@@ -52,15 +52,49 @@ jobs:
 
       # --- 무거운 쪽: ffmpeg 를 넣어 아무 PC에서나 바로 실행 ---------------
       - name: ffmpeg 내려받기
+        # 남의 서버 사정으로 빌드가 깨지지 않도록 재시도 + 대체 소스를 둔다.
+        # 1순위는 GitHub 릴리스(러너와 같은 인프라라 안정적)의 LGPL 빌드.
+        # LGPL 로도 우리가 쓰는 h264/webp 디코딩과 gif 인코딩은 전부 된다.
         run: |
-          $zip = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-          Invoke-WebRequest -Uri $zip -OutFile ffmpeg.zip -UseBasicParsing
-          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_dl
+          $sources = @(
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-lgpl.zip",
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          )
+          $got = $false
+          foreach ($url in $sources) {
+            foreach ($try in 1..3) {
+              try {
+                Write-Host "내려받는 중 (시도 $try): $url"
+                Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing -TimeoutSec 600
+                $got = $true
+                break
+              } catch {
+                Write-Host "  실패: $($_.Exception.Message)"
+                Start-Sleep -Seconds (10 * $try)
+              }
+            }
+            if ($got) { break }
+          }
+          if (-not $got) { throw "ffmpeg 를 어느 소스에서도 내려받지 못했습니다" }
+
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_dl -Force
           $exe = Get-ChildItem ffmpeg_dl -Recurse -Filter ffmpeg.exe |
                  Select-Object -First 1
           if (-not $exe) { throw "내려받은 압축에 ffmpeg.exe 가 없습니다" }
           Copy-Item $exe.FullName ffmpeg.exe
           .\ffmpeg.exe -version | Select-Object -First 1
+
+      - name: ffmpeg 코덱 확인
+        # 빌드마다 코덱 구성이 다르다. webp 를 못 읽는 ffmpeg 가 섞여 들어가면
+        # exe 는 멀쩡히 만들어지고 사용자가 webp 를 넣는 순간에야 깨진다.
+        run: |
+          $dec = (.\ffmpeg.exe -hide_banner -decoders 2>&1) -join "`n"
+          foreach ($codec in @("webp_anim", "h264", "gif")) {
+            if ($dec -notmatch "\s$codec\s") { throw "$codec 디코더가 없습니다" }
+          }
+          $enc = (.\ffmpeg.exe -hide_banner -encoders 2>&1) -join "`n"
+          if ($enc -notmatch "\sgif\s") { throw "gif 인코더가 없습니다" }
+          Write-Host "코덱 확인 완료: webp_anim / h264 / gif"
 
       - name: 빌드 (ffmpeg 포함)
         run: python build_exe.py --with-ffmpeg

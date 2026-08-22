@@ -62,6 +62,10 @@ git tag v1.0.0 && git push origin v1.0.0
 않았는지** 확인하고, 하나라도 실패하면 빌드를 실패시킵니다. 이것들은 빠져도 exe 는
 멀쩡히 만들어지고 실행할 때가 되어서야 조용히 기능만 죽기 때문입니다.
 
+`GifBox-full.exe` 에 들어가는 ffmpeg 는 GitHub 릴리스의 LGPL 빌드를 씁니다
+(다운로드가 실패하면 다른 소스로 재시도하고, webp·h264 디코더가 있는지까지
+확인한 뒤에야 묶습니다). 함께 배포되는 것들의 라이선스는 [NOTICE.md](NOTICE.md) 참고.
+
 **받는 사람에게 미리 알려줄 것:** 코드 서명 인증서를 붙이지 않아서 처음 실행할 때
 Windows SmartScreen 이 파란 경고창을 띄웁니다. **추가 정보 → 실행** 을 누르면 됩니다.
 백신 오탐도 가끔 있는데 PyInstaller 로 묶은 exe 에서 흔한 일입니다.
@@ -295,3 +299,4 @@ GUI 목록과 CLI `--preset` 에 자동으로 나타납니다.
 ## 라이선스
 
 MIT — [LICENSE](LICENSE) 참고.
+함께 묶어 배포하는 것들(ffmpeg 등)은 [NOTICE.md](NOTICE.md) 를 보세요.
