@@ -1,0 +1,6 @@
+# 실행에 필요한 것
+pillow>=9.1              # 변환(webp 폴백)·썸네일·아이콘
+tkinterdnd2>=0.4         # 창에 파일 끌어다 놓기 (없으면 드래그만 비활성)
+
+# exe 빌드에만 필요:  pip install pyinstaller
+# 영상 변환에 필요:   winget install Gyan.FFmpeg
