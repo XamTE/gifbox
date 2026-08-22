@@ -178,6 +178,14 @@ def find_ffmpeg():
         except Exception:
             found = None
 
+    # 반드시 절대 경로로 돌려준다. Windows 의 which 는 현재 폴더에 있으면
+    # ".\ffmpeg.EXE" 같은 상대 경로를 주는데, 작업 폴더가 다른 곳에서 쓰이면
+    # (빌드 도구, 다른 폴더의 파일 변환) 그대로 깨진다.
+    if found:
+        try:
+            found = str(Path(found).resolve())
+        except OSError:
+            pass
     _ffmpeg_cache.append(found)
     return found
 
