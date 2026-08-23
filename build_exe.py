@@ -65,6 +65,11 @@ def run_pyinstaller(entry, name, windowed, args):
     if ICON.exists():
         cmd += ["--icon", str(ICON), "--add-data", "%s;assets" % ICON]
 
+    # 패치노트는 exe 에 넣는다 — 네트워크 없이도, 지금 이 빌드의 내용으로 보이게
+    changelog = ROOT / "CHANGELOG.md"
+    if changelog.exists():
+        cmd += ["--add-data", "%s;." % changelog]
+
     for mod in EXCLUDES:
         cmd += ["--exclude-module", mod]
 

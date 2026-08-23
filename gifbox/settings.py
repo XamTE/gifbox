@@ -50,6 +50,15 @@ DEFAULTS = {
     # --- 프리셋 / 기록 ---
     "preset": "discord",              # 마지막으로 고른 프리셋
     "keep_history": True,
+
+    # --- 즐겨찾기 (기본 브라우저로 여는 사이트 목록) ---
+    "bookmarks": None,                # None 이면 bookmarks.DEFAULTS 를 쓴다
+
+    # --- 패치노트 / 업데이트 ---
+    "show_release_notes": True,       # 새 버전 첫 실행 때 바뀐 점 보여주기
+    "last_seen_version": "",          # 패치노트를 이미 본 버전
+    "check_updates": True,            # GitHub 에서 새 버전 확인
+    "last_update_check": 0,           # 마지막 확인 시각 (epoch 초)
 }
 
 _RANGES = {
@@ -106,11 +115,23 @@ class Settings(dict):
             self["delete_mode"] = "trash"
         for key in ("overwrite", "copy_to_clipboard", "delete_original",
                     "open_folder_after", "always_on_top", "reencode_gif",
-                    "keep_history"):
+                    "keep_history", "show_release_notes", "check_updates"):
             self[key] = bool(self.get(key))
         for key in ("outdir", "web_outdir", "dither", "geometry",
-                    "trim_start", "trim_duration", "preset"):
+                    "trim_start", "trim_duration", "preset",
+                    "last_seen_version"):
             self[key] = str(self.get(key) or "")
+
+        # 즐겨찾기는 저장된 값이 없으면 기본 목록으로 채운다
+        from .bookmarks import DEFAULTS as BOOKMARK_DEFAULTS, clean
+        raw_marks = self.get("bookmarks")
+        self["bookmarks"] = clean(BOOKMARK_DEFAULTS if raw_marks is None
+                                  else raw_marks)
+
+        try:
+            self["last_update_check"] = float(self.get("last_update_check") or 0)
+        except (TypeError, ValueError):
+            self["last_update_check"] = 0
         try:
             self["target_mb"] = max(0.0, float(self.get("target_mb") or 0))
         except (TypeError, ValueError):

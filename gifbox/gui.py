@@ -113,6 +113,8 @@ class App:
         self.busy = False
         self._had_source_error = False
         self.settings_window = None
+        self.notes_window = None
+        self.update_info = None
         self.icon_path = resource_path("assets/GifBox.ico")
 
         self.root = (TkinterDnD.Tk() if HAS_DND else tk.Tk())
@@ -132,6 +134,7 @@ class App:
         self._fit_window()
         self._bind()
         self._pump()
+        self.root.after(400, self._startup_tasks)
 
     def _fit_window(self):
         """위젯이 요구하는 크기보다 창이 작으면 넓혀준다.
@@ -158,6 +161,7 @@ class App:
         outer.pack(fill="both", expand=True)
 
         self._build_header(outer)
+        self._build_bookmarks(outer)
         self._build_drop(outer)
         self._build_url(outer)
         self._build_options(outer)
@@ -182,6 +186,55 @@ class App:
 
         self.preset_hint = ttk.Label(outer, text="", style="Dim.TLabel")
         self.preset_hint.pack(fill="x", pady=(3, 0))
+
+    def _build_bookmarks(self, outer):
+        """자주 가는 사이트 줄. 창 안에 웹뷰를 심지 않고 기본 브라우저를 부른다."""
+        self.mark_bar = ttk.Frame(outer)
+        self.mark_bar.pack(fill="x", pady=(6, 0))
+        self.mark_bar.bind("<Configure>",
+                           lambda e: self._reflow_bookmarks(e.width))
+        self.mark_buttons = []
+        self._mark_cols = None
+        self.refresh_bookmarks()
+
+    def refresh_bookmarks(self):
+        from . import bookmarks as bm
+
+        for btn in self.mark_buttons:
+            btn.destroy()
+        self.mark_buttons = []
+        for item in self.settings.get("bookmarks") or []:
+            btn = ttk.Button(self.mark_bar, text=bm.label(item),
+                             style="Mark.TButton",
+                             command=lambda it=item: self.open_bookmark(it))
+            self.mark_buttons.append(btn)
+        self._mark_cols = None
+        self._reflow_bookmarks()
+
+    def _reflow_bookmarks(self, width=None):
+        """버튼 실제 너비를 재서 줄바꿈한다 (이름 길이가 제각각이라)."""
+        if not self.mark_buttons:
+            return
+        if width is None:
+            width = self.mark_bar.winfo_width()
+        if width <= 1:
+            self.mark_bar.after(50, self._reflow_bookmarks)
+            return
+        row = col = 0
+        used = 0
+        for btn in self.mark_buttons:
+            need = btn.winfo_reqwidth() + 4
+            if col and used + need > width:
+                row, col, used = row + 1, 0, 0
+            btn.grid(row=row, column=col, padx=2, pady=2, sticky="w")
+            used += need
+            col += 1
+
+    def open_bookmark(self, item):
+        from . import bookmarks as bm
+
+        if not bm.open_site(item):
+            self._write("주소를 열지 못했습니다: %s" % item.get("url"), "err")
 
     def _build_drop(self, outer):
         self.drop = tk.Label(
@@ -323,12 +376,54 @@ class App:
             return
         self.settings_window = SettingsDialog(self)
 
+    # ------------------------------------------------------------ 시작 시 할 일
+
+    def _startup_tasks(self):
+        """창이 뜬 뒤: 패치노트 한 번, 그리고 조용한 업데이트 확인."""
+        from . import notes_dialog
+
+        if notes_dialog.should_show(self.settings):
+            self.notes_window = notes_dialog.NotesDialog(self)
+
+        from . import updater
+        if updater.should_check(self.settings):
+            threading.Thread(target=self._check_updates_quietly,
+                             daemon=True).start()
+
+    def _check_updates_quietly(self):
+        """실패해도 아무 말 없이 넘어간다 — 변환하러 켠 사람을 방해하지 않게."""
+        from . import updater
+
+        info = updater.check()
+        if info is None:
+            return
+        self.queue.put(("update", {"info": info}))
+
+    def remember_update(self, info):
+        import time
+
+        self.update_info = info
+        self.settings["last_update_check"] = time.time()
+        self.settings.save()
+
+    def _handle_update(self, info):
+        self.remember_update(info)
+        if info.get("newer"):
+            self._write("⬆ 새 버전 %s 이 나왔습니다 (설정 → 업데이트에서 받기)"
+                        % info["version"], "warn")
+
+    def log_line(self, text, tag=None):
+        """다른 창에서도 본 창 로그에 한 줄 남길 수 있게."""
+        self._write(text, tag)
+
     def on_settings_changed(self, key):
         """설정 창에서 값이 바뀌면 본 창에 바로 반영한다."""
         if key in (None, "always_on_top"):
             self._apply_topmost()
         if key in (None, "reencode_gif", "overwrite"):
             self._show_preset(self.settings.preset)   # 프리셋과 어긋났는지 다시 표시
+        if key in (None, "bookmarks"):
+            self.refresh_bookmarks()
 
     def _apply_topmost(self):
         self.root.attributes("-topmost", bool(self.settings.always_on_top))
@@ -807,6 +902,9 @@ class App:
         elif kind == "hover":
             self._begin_animation(data)
 
+        elif kind == "update":
+            self._handle_update(data["info"])
+
         elif kind == "source_error":
             self._had_source_error = True
             self._write("✘ %s" % data["message"], "err")
@@ -901,6 +999,16 @@ def selftest():
 
     report["ffmpeg"] = find_ffmpeg() or "없음"
     report["엔진"] = [x.name for x in all_converters() if x.available()]
+
+    # 패치노트가 번들에서 빠지면 조용히 안 뜨기만 한다 — 여기서 잡는다
+    try:
+        from . import changelog
+
+        body = changelog.for_version()
+        report["패치노트"] = ("정상 (%d줄)" % len(body.splitlines())) if body.strip() \
+            else "실패: 이 버전 항목이 없습니다 (%s)" % changelog.changelog_path()
+    except Exception as e:
+        report["패치노트"] = "실패: %s" % e
 
     # 드래그앤드롭: 모듈만 있는 게 아니라 tkdnd 바이너리까지 살아있는지 본다
     try:

@@ -92,6 +92,14 @@ def apply(root):
               background=ghost_states, lightcolor=ghost_states,
               darkcolor=ghost_states, foreground=[("active", text)])
 
+    # 즐겨찾기 줄은 여러 개가 나란히 서므로 더 촘촘하게
+    style.configure("Mark.TButton", background=bg_alt, foreground=muted,
+                    bordercolor=border, lightcolor=bg_alt, darkcolor=bg_alt,
+                    padding=(7, 3), font=FONT_SM)
+    style.map("Mark.TButton",
+              background=ghost_states, lightcolor=ghost_states,
+              darkcolor=ghost_states, foreground=[("active", text)])
+
     # --- 입력 ----------------------------------------------------------
     for name in ("TEntry", "TCombobox", "TSpinbox"):
         style.configure(name, fieldbackground=surface, background=surface,
